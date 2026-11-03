@@ -1,0 +1,323 @@
+<?xml version='1.0' encoding='utf-8'?>
+<roblox version="4">
+  <External>null</External>
+  <External>nil</External>
+  <Item class="Workspace" referent="RBX1">
+    <Properties>
+      <string name="Name">Workspace</string>
+      <bool name="StreamingEnabled">true</bool>
+      <int name="StreamingMinRadius">128</int>
+      <int name="StreamingTargetRadius">512</int>
+    </Properties>
+    <Item class="Terrain" referent="RBX2">
+      <Properties>
+        <string name="Name">Terrain</string>
+      </Properties>
+    </Item>
+  </Item>
+  <Item class="ReplicatedStorage" referent="RBX3">
+    <Properties>
+      <string name="Name">ReplicatedStorage</string>
+    </Properties>
+    <Item class="Folder" referent="RBX4">
+      <Properties>
+        <string name="Name">Shared</string>
+      </Properties>
+      <Item class="ModuleScript" referent="RBX10">
+        <Properties>
+          <string name="Name">Config</string>
+          <ProtectedString name="Source">return {
+ MapSize = 1536, Seed = 7319, MaxHealth = 100,
+ WalkSpeed = 12, SprintSpeed = 21, CrouchSpeed = 7,
+ Weapons = {
+  M416 = {Damage=25, HeadMultiplier=2, Interval=0.1, Magazine=30, Reload=2.4, Speed=1800, Gravity=38, Range=2200, Spread=0.003, Recoil=1.1},
+  AKM = {Damage=33, HeadMultiplier=2, Interval=0.14, Magazine=30, Reload=2.8, Speed=1500, Gravity=38, Range=2000, Spread=0.004, Recoil=1.7},
+ },
+}
+</ProtectedString>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="ServerScriptService" referent="RBX5">
+    <Properties>
+      <string name="Name">ServerScriptService</string>
+    </Properties>
+    <Item class="Folder" referent="RBX6">
+      <Properties>
+        <string name="Name">Game</string>
+      </Properties>
+      <Item class="Script" referent="RBX11">
+        <Properties>
+          <string name="Name">Main</string>
+          <ProtectedString name="Source">local Players=game:GetService('Players')
+local RS=game:GetService('ReplicatedStorage')
+local RunService=game:GetService('RunService')
+local Config=require(RS.Shared.Config)
+local spawns=require(script.Parent.World).build()
+local remote=Instance.new('RemoteEvent');remote.Name='GameAction';remote.Parent=RS
+local states={};local bullets={};local rng=Random.new()
+local function finite(v) return typeof(v)=='Vector3' and v.X==v.X and v.Y==v.Y and v.Z==v.Z and v.Magnitude&lt;1e6 end
+local function sync(p,s) remote:FireClient(p,'State',{Weapon=s.weapon,Ammo=s.ammo,Reserve=s.reserve,Reloading=s.reloading,Kills=s.kills}) end
+local function equip(p,s,name)
+ if s.weapon and s.ammo then s.slots[s.weapon]={ammo=s.ammo,reserve=s.reserve} end
+ s.weapon=name;local slot=s.slots[name];s.ammo=slot and slot.ammo or Config.Weapons[name].Magazine;s.reserve=slot and slot.reserve or 180;s.reloading=false;s.generation+=1
+ local char=p.Character;if not char then return end
+ local old=char:FindFirstChild('Weapon');if old then old:Destroy() end
+ local hand=char:FindFirstChild('RightHand') or char:FindFirstChild('Right Arm');if not hand then return end
+ local model=Instance.new('Model');model.Name='Weapon';model.Parent=char
+ local function piece(n,size,offset,color)
+  local part=Instance.new('Part');part.Name=n;part.Size=size;part.Color=color;part.Material=Enum.Material.Metal;part.CanCollide=false;part.Massless=true;part.CFrame=hand.CFrame*offset;part.Parent=model
+  local weld=Instance.new('WeldConstraint');weld.Part0=hand;weld.Part1=part;weld.Parent=part;return part
+ end
+ piece('Receiver',Vector3.new(.35,.5,1.6),CFrame.new(0,-.1,-.5),Color3.fromRGB(48,52,47))
+ piece('Barrel',Vector3.new(.14,.14,1.8),CFrame.new(0,.05,-2),Color3.fromRGB(30,30,30))
+ piece('Stock',Vector3.new(.3,.4,.8),CFrame.new(0,-.05,.6),Color3.fromRGB(91,77,52))
+ piece('Magazine',Vector3.new(.25,.8,.5),CFrame.new(0,-.6,-.4),Color3.fromRGB(42,42,40))
+ sync(p,s)
+end
+local function join(p)
+ local s={slots={},weapon='M416',ammo=30,reserve=180,lastShot=0,tokens=30,tokenTime=os.clock(),kills=0,generation=0,reloading=false};states[p]=s
+ p.CharacterAdded:Connect(function(char)
+  s.generation+=1;s.reloading=false;s.slots={};s.ammo=nil;s.reserve=nil
+  local hum=char:WaitForChild('Humanoid');hum.MaxHealth=100;hum.Health=100;hum.WalkSpeed=Config.WalkSpeed
+  char:WaitForChild('HumanoidRootPart');char:PivotTo(CFrame.new(spawns[rng:NextInteger(1,#spawns)]))
+  equip(p,s,s.weapon)
+  hum.Died:Connect(function()
+   local killer=hum:GetAttribute('Attacker');local attacker=killer and Players:GetPlayerByUserId(killer)
+   if attacker and attacker~=p and states[attacker] then states[attacker].kills+=1;sync(attacker,states[attacker]);remote:FireAllClients('Kill',attacker.DisplayName..' eliminou '..p.DisplayName) end
+  end)
+ end)
+end
+Players.PlayerAdded:Connect(join);for _,p in ipairs(Players:GetPlayers()) do join(p) end
+Players.PlayerRemoving:Connect(function(p) states[p]=nil end)
+remote.OnServerEvent:Connect(function(p,action,data)
+ local s=states[p];local char=p.Character;local hum=char and char:FindFirstChildOfClass('Humanoid');local root=char and char:FindFirstChild('HumanoidRootPart')
+ if not s or not hum or hum.Health&lt;=0 or not root then return end
+ local now=os.clock();s.tokens=math.min(30,s.tokens+(now-s.tokenTime)*20);s.tokenTime=now;if s.tokens&lt;1 then return end;s.tokens-=1
+ local w=Config.Weapons[s.weapon]
+ if action=='Move' and type(data)=='string' then
+  local speeds={Walk=Config.WalkSpeed,Sprint=Config.SprintSpeed,Crouch=Config.CrouchSpeed,ADS=8}
+  if speeds[data] then hum.WalkSpeed=speeds[data];hum:SetAttribute('Stance',data) end
+ elseif action=='Equip' and Config.Weapons[data] then
+  if not s.reloading and now-s.lastShot&gt;0.5 then equip(p,s,data);s.lastShot=now end
+ elseif action=='Reload' then
+  if s.reloading or s.ammo&gt;=w.Magazine or s.reserve&lt;=0 then return end
+  s.reloading=true;local gen=s.generation;sync(p,s)
+  task.delay(w.Reload,function()
+   if states[p]~=s or s.generation~=gen or hum.Health&lt;=0 then return end
+   local n=math.min(w.Magazine-s.ammo,s.reserve);s.ammo+=n;s.reserve-=n;s.reloading=false;sync(p,s)
+  end)
+ elseif action=='Fire' and type(data)=='table' then
+  if not finite(data.Origin) or not finite(data.Direction) or math.abs(data.Direction.Magnitude-1)&gt;0.02 then return end
+  local head=char:FindFirstChild('Head');if not head or (data.Origin-head.Position).Magnitude&gt;12 then return end
+  local params=RaycastParams.new();params.FilterDescendantsInstances={char};params.IgnoreWater=true
+  if workspace:Raycast(head.Position,data.Origin-head.Position,params) then return end
+  if s.reloading or s.ammo&lt;=0 or now-s.lastShot&lt;w.Interval*0.95 or #bullets&gt;=512 then return end
+  s.lastShot=now;s.ammo-=1;sync(p,s)
+  local direction=(data.Direction+Vector3.new(rng:NextNumber(-w.Spread,w.Spread),rng:NextNumber(-w.Spread,w.Spread),rng:NextNumber(-w.Spread,w.Spread))).Unit
+  table.insert(bullets,{position=data.Origin,velocity=direction*w.Speed,distance=0,weapon=w,params=params,owner=p})
+  remote:FireAllClients('Shot',{Player=p,Position=head.Position})
+ end
+end)
+RunService.Heartbeat:Connect(function(dt)
+ -- Fixed maximum simulation step, swept rays prevent tunneling.
+ dt=math.min(dt,0.25)
+ for i=#bullets,1,-1 do
+  local b=bullets[i];local remove=false;local remaining=dt
+  while remaining&gt;0 and not remove do
+   local step=math.min(remaining,1/60);remaining-=step
+   local delta=b.velocity*step+Vector3.new(0,-b.weapon.Gravity*step*step/2,0)
+   local hit=workspace:Raycast(b.position,delta,b.params)
+   b.velocity+=Vector3.new(0,-b.weapon.Gravity*step,0);b.distance+=delta.Magnitude
+   if hit then
+    local model=hit.Instance:FindFirstAncestorOfClass('Model');local target=model and model:FindFirstChildOfClass('Humanoid')
+    if target and target.Health&gt;0 then
+     local damage=b.weapon.Damage*(hit.Instance.Name=='Head' and b.weapon.HeadMultiplier or 1)
+     target:SetAttribute('Attacker',b.owner.UserId);target:TakeDamage(damage)
+     if b.owner.Parent then remote:FireClient(b.owner,'Hit',damage) end
+    end
+    remote:FireAllClients('Impact',hit.Position);remove=true
+   elseif b.distance&gt;b.weapon.Range then remove=true else b.position+=delta end
+  end
+  if remove then table.remove(bullets,i) end
+ end
+end)
+-- Local training targets are real Humanoids and use the same damage path.
+for i=1,6 do
+ local model=Instance.new('Model');model.Name='TrainingTarget';model.Parent=workspace
+ local torso=Instance.new('Part');torso.Name='HumanoidRootPart';torso.Size=Vector3.new(4,5,2);torso.Position=Vector3.new(-25+i*9,18,-105);torso.Anchored=true;torso.Color=Color3.fromRGB(145,86,49);torso.Parent=model
+ local head=Instance.new('Part');head.Name='Head';head.Shape=Enum.PartType.Ball;head.Size=Vector3.new(2,2,2);head.Position=torso.Position+Vector3.new(0,3.5,0);head.Anchored=true;head.Parent=model
+ local h=Instance.new('Humanoid');h.RequiresNeck=false;h.Parent=model
+ -- Targets stay eliminated until the next server session.
+ h.BreakJointsOnDeath=false
+end
+</ProtectedString>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="RBX12">
+        <Properties>
+          <string name="Name">World</string>
+          <ProtectedString name="Source">local World = {}
+function World.build()
+ local terrain = workspace.Terrain
+ local root = Instance.new('Folder'); root.Name='Map'; root.Parent=workspace
+ local rng=Random.new(7319)
+ local function part(name,size,cf,material,color,parent)
+  local p=Instance.new('Part'); p.Name=name;p.Size=size;p.CFrame=cf;p.Anchored=true;p.Material=material;p.Color=color;p.TopSurface=Enum.SurfaceType.Smooth;p.BottomSurface=Enum.SurfaceType.Smooth;p.Parent=parent or root;return p
+ end
+ terrain:FillBlock(CFrame.new(0,-24,0),Vector3.new(1800,32,1800),Enum.Material.Water)
+ for x=-736,736,64 do for z=-736,736,64 do
+  local edge=math.max(math.abs(x),math.abs(z))
+  local height=math.max(-10,10+math.noise(x/360,z/360)*42-(math.max(0,edge-610)/3))
+  terrain:FillBlock(CFrame.new(x,height/2-12,z),Vector3.new(64,height+24,64),edge&gt;650 and Enum.Material.Sand or Enum.Material.Grass)
+ end end
+ local pois={{'Bootcamp',0,0},{'Paradise Grove',350,-350},{'River Village',-350,320},{'Temple Ruins',370,350}}
+ local spawns={}
+ for _,poi in ipairs(pois) do
+  local name,x,z=poi[1],poi[2],poi[3]
+  terrain:FillBlock(CFrame.new(x,2,z),Vector3.new(230,24,230),Enum.Material.Ground)
+  local model=Instance.new('Model');model.Name=name;model.Parent=root
+  for i=1,4 do
+   local bx=x+((i-1)%2)*100-50;local bz=z+math.floor((i-1)/2)*100-50
+   local base=CFrame.new(bx,15,bz)
+   local concrete=Color3.fromRGB(142,139,119)
+   part('Floor',Vector3.new(64,2,48),base,Enum.Material.Concrete,concrete,model)
+   -- Front wall split around an actual walk-through doorway; side windows are open gaps.
+   for _,dx in ipairs({-22,22}) do part('DoorWall',Vector3.new(20,18,2),base*CFrame.new(dx,10,-24),Enum.Material.Concrete,concrete,model) end
+   part('DoorLintel',Vector3.new(24,5,2),base*CFrame.new(0,16.5,-24),Enum.Material.Concrete,concrete,model)
+   part('BackWall',Vector3.new(64,18,2),base*CFrame.new(0,10,24),Enum.Material.Concrete,concrete,model)
+   for _,dx in ipairs({-32,32}) do
+    part('WindowSill',Vector3.new(2,6,48),base*CFrame.new(dx,4,0),Enum.Material.Concrete,concrete,model)
+    part('WindowHeader',Vector3.new(2,5,48),base*CFrame.new(dx,16.5,0),Enum.Material.Concrete,concrete,model)
+    for _,dz in ipairs({-19,19}) do part('WindowPillar',Vector3.new(2,8,10),base*CFrame.new(dx,10,dz),Enum.Material.Concrete,concrete,model) end
+   end
+   part('Roof',Vector3.new(68,2,52),base*CFrame.new(0,20,0),Enum.Material.Metal,Color3.fromRGB(80,90,78),model)
+   for step=1,20 do part('Stairs',Vector3.new(10,1,3),base*CFrame.new(40,step-1,30-step*3),Enum.Material.Concrete,concrete,model) end
+   for c=1,3 do part('Cover',Vector3.new(6,5,5),base*CFrame.new(-18+c*10,3,8),Enum.Material.WoodPlanks,Color3.fromRGB(105,79,48),model) end
+   table.insert(spawns,Vector3.new(bx,20,bz))
+  end
+  part('Road',Vector3.new(20,1,230),CFrame.new(x,14.2,z),Enum.Material.Asphalt,Color3.fromRGB(65,65,58))
+ end
+ for _=1,400 do
+  local x,z=rng:NextNumber(-640,640),rng:NextNumber(-640,640)
+  local clear=false
+  for _,poi in ipairs(pois) do if math.abs(x-poi[2])&lt;130 and math.abs(z-poi[3])&lt;130 then clear=true end end
+  if not clear then
+   local hit=workspace:Raycast(Vector3.new(x,150,z),Vector3.new(0,-250,0))
+   if hit and hit.Material~=Enum.Material.Water then
+    local y=hit.Position.Y
+    local trunk=part('PalmTrunk',Vector3.new(3,26,3),CFrame.new(x,y+13,z)*CFrame.Angles(0,0,0.08),Enum.Material.Wood,Color3.fromRGB(107,88,59))
+    trunk.Shape=Enum.PartType.Cylinder;trunk.Size=Vector3.new(26,3,3);trunk.CFrame=CFrame.new(x,y+13,z)*CFrame.Angles(0,0,math.pi/2-0.08)
+    for a=0,5 do
+     local leaf=Instance.new('WedgePart');leaf.Name='PalmFrond';leaf.Size=Vector3.new(7,2,19);leaf.CFrame=CFrame.new(x,y+26,z)*CFrame.Angles(0,a*math.pi/3,0)*CFrame.new(0,0,7)*CFrame.Angles(-0.2,0,0);leaf.Anchored=true;leaf.CanCollide=false;leaf.Material=Enum.Material.Grass;leaf.Color=Color3.fromRGB(49,88,40);leaf.Parent=root
+    end
+   end
+  end
+ end
+ local lighting=game:GetService('Lighting');lighting.ClockTime=14;lighting.Brightness=2;lighting.Ambient=Color3.fromRGB(115,130,110)
+ local atmosphere=Instance.new('Atmosphere');atmosphere.Density=0.28;atmosphere.Color=Color3.fromRGB(194,218,202);atmosphere.Parent=lighting
+ return spawns
+end
+return World
+</ProtectedString>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="StarterPlayer" referent="RBX7">
+    <Properties>
+      <string name="Name">StarterPlayer</string>
+    </Properties>
+    <Item class="StarterPlayerScripts" referent="RBX8">
+      <Properties>
+        <string name="Name">StarterPlayerScripts</string>
+      </Properties>
+      <Item class="Folder" referent="RBX9">
+        <Properties>
+          <string name="Name">Game</string>
+        </Properties>
+        <Item class="LocalScript" referent="RBX13">
+          <Properties>
+            <string name="Name">Main</string>
+            <ProtectedString name="Source">local Players=game:GetService('Players')
+local UIS=game:GetService('UserInputService')
+local CAS=game:GetService('ContextActionService')
+local Run=game:GetService('RunService')
+local RS=game:GetService('ReplicatedStorage')
+local Debris=game:GetService('Debris')
+local player=Players.LocalPlayer
+local remote=RS:WaitForChild('GameAction')
+local Config=require(RS:WaitForChild('Shared'):WaitForChild('Config'))
+local camera=workspace.CurrentCamera
+local state={Weapon='M416',Ammo=30,Reserve=180,Kills=0}
+local firing=false;local ads=false;local sprint=false;local crouch=false;local fps=false;local last=0;local recoil=0
+local gui=Instance.new('ScreenGui');gui.Name='JungleHUD';gui.ResetOnSpawn=false;gui.Parent=player:WaitForChild('PlayerGui')
+local function label(name,size,pos,text)
+ local l=Instance.new('TextLabel');l.Name=name;l.Size=size;l.Position=pos;l.BackgroundColor3=Color3.fromRGB(19,27,23);l.BackgroundTransparency=.25;l.TextColor3=Color3.fromRGB(235,235,217);l.Font=Enum.Font.GothamMedium;l.TextScaled=true;l.Text=text;l.Parent=gui;return l
+end
+local info=label('Status',UDim2.fromOffset(330,64),UDim2.new(.5,-165,1,-90),'')
+local cross=label('Crosshair',UDim2.fromOffset(24,24),UDim2.new(.5,-12,.5,-12),'+');cross.BackgroundTransparency=1
+local feed=label('Feed',UDim2.new(.4,0,0,35),UDim2.new(.6,-10,0,25),'JUNGLE BATTLEGROUNDS · TREINO')
+local help=label('Controls',UDim2.new(.6,0,0,35),UDim2.new(.2,0,0,70),'WASD mover · Shift correr · C agachar · V FPS/TPS · RMB mira · R recarga · 1/2 arma')
+help.TextScaled=false;help.TextSize=14;help.TextWrapped=true
+local function stance()
+ remote:FireServer('Move',ads and 'ADS' or crouch and 'Crouch' or sprint and 'Sprint' or 'Walk')
+end
+local function act(name,input)
+ local begin=input==Enum.UserInputState.Begin
+ if name=='Fire' then firing=begin
+ elseif name=='Aim' then ads=begin;stance()
+ elseif name=='Sprint' then sprint=begin;stance()
+ elseif name=='Crouch' and begin then crouch=not crouch;stance()
+ elseif name=='Camera' and begin then fps=not fps
+ elseif name=='Reload' and begin then remote:FireServer('Reload')
+ elseif name=='Primary' and begin then remote:FireServer('Equip','M416')
+ elseif name=='Secondary' and begin then remote:FireServer('Equip','AKM') end
+ return Enum.ContextActionResult.Sink
+end
+CAS:BindAction('Fire',act,true,Enum.UserInputType.MouseButton1)
+CAS:BindAction('Aim',act,true,Enum.UserInputType.MouseButton2)
+CAS:BindAction('Sprint',act,true,Enum.KeyCode.LeftShift)
+CAS:BindAction('Crouch',act,true,Enum.KeyCode.C)
+CAS:BindAction('Camera',act,true,Enum.KeyCode.V)
+CAS:BindAction('Reload',act,true,Enum.KeyCode.R)
+CAS:BindAction('Primary',act,false,Enum.KeyCode.One)
+CAS:BindAction('Secondary',act,false,Enum.KeyCode.Two)
+for index,name in ipairs({'Fire','Aim','Reload','Crouch','Camera','Sprint'}) do CAS:SetTitle(name,name);CAS:SetPosition(name,UDim2.new(1,-90-(index%3)*80,1,-110-math.floor((index-1)/3)*80)) end
+UIS.WindowFocusReleased:Connect(function() firing=false;ads=false;sprint=false;stance() end)
+remote.OnClientEvent:Connect(function(action,data)
+ if action=='State' then state=data
+ elseif action=='Kill' then feed.Text=data
+ elseif action=='Hit' then cross.TextColor3=Color3.fromRGB(255,90,65);task.delay(.12,function() cross.TextColor3=Color3.fromRGB(235,235,217) end)
+ elseif action=='Impact' then
+  local p=Instance.new('Part');p.Shape=Enum.PartType.Ball;p.Size=Vector3.new(.18,.18,.18);p.Position=data;p.Anchored=true;p.CanCollide=false;p.CanQuery=false;p.Material=Enum.Material.Neon;p.Color=Color3.fromRGB(224,185,110);p.Parent=workspace;Debris:AddItem(p,.15)
+ elseif action=='Shot' then
+  local char=data.Player.Character;local head=char and char:FindFirstChild('Head')
+  if head then local light=Instance.new('PointLight');light.Color=Color3.fromRGB(255,191,95);light.Brightness=2;light.Range=10;light.Parent=head;Debris:AddItem(light,.05) end
+ end
+end)
+Run.RenderStepped:Connect(function(dt)
+ local char=player.Character;local hum=char and char:FindFirstChildOfClass('Humanoid')
+ if not hum or hum.Health&lt;=0 then firing=false;return end
+ UIS.MouseBehavior=Enum.MouseBehavior.LockCenter
+ player.CameraMode=fps and Enum.CameraMode.LockFirstPerson or Enum.CameraMode.Classic
+ player.CameraMinZoomDistance=fps and .5 or (ads and 3 or 7)
+ player.CameraMaxZoomDistance=fps and .5 or (ads and 3 or 7)
+ hum.CameraOffset=hum.CameraOffset:Lerp(Vector3.new(fps and 0 or 2,crouch and -1 or 0,0),math.min(1,dt*12))
+ camera.FieldOfView+=((ads and 48 or 75)-camera.FieldOfView)*math.min(1,dt*12)
+ if recoil&gt;0 then local amount=math.min(recoil,dt*20);camera.CFrame*=CFrame.Angles(math.rad(amount),0,0);recoil-=amount end
+ local w=Config.Weapons[state.Weapon]
+ if firing and not state.Reloading and state.Ammo&gt;0 and os.clock()-last&gt;=w.Interval then
+  last=os.clock();local ray=camera:ViewportPointToRay(camera.ViewportSize.X/2,camera.ViewportSize.Y/2)
+  remote:FireServer('Fire',{Origin=ray.Origin,Direction=ray.Direction.Unit});recoil+=w.Recoil
+ end
+ info.Text=string.format('HP %d  |  ELIM %d\n%s  %d / %d %s',hum.Health,state.Kills,state.Weapon,state.Ammo,state.Reserve,state.Reloading and 'RECARREGANDO' or '')
+end)
+</ProtectedString>
+          </Properties>
+        </Item>
+      </Item>
+    </Item>
+  </Item>
+</roblox>
